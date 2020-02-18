@@ -1,0 +1,304 @@
+---
+title: Introducing JellyMe4
+subtitle: Black Magic and Many Babies
+author:
+    - "Phillip M. Alday"
+date: February 2020
+---
+
+`JellyMe4` is brand new. There is currently a request to have it registered as an official package, but for now you'll have to install it via
+
+```{julia; cache=true; wrap=false}
+julia>]https://github.com/palday/JellyMe4.jl
+```
+
+There is relatively little only help via the Julia help (`?`) because creating this type of bridge mostly involves defining methods for the functions RCall uses in the background. These functions are then invoked via `@rget`, `@rput`, `R"some_command"`, and `rcopy`), and the documentation for those is (intentionally) generic.
+
+There is however documentation available in the [README](https://github.com/palday/JellyMe4.jl) and some error checking that will catch common mistakes and suggest what you might actually want to do. We'll see that in some examples below.
+
+# Preprocessing of Many Babies Data
+
+(borrowed from https://github.com/RePsychLing/mb1/blob//MB1_analysis.jmd at commit `479db01 `)
+
+```{julia; cache=true; wrap=false}
+using CSV            # read and write .csv files
+using Gadfly         # plotting
+using DataFrames
+using DataFramesMeta # dplyr-like operations
+using MixedModels
+using StatsBase      # basic statistics functions
+using RCall          # Call R from Julia
+using JellyMe4       # see https://github.com/palday/JellyMe4.jl
+R"""
+library("lme4")
+library("lattice")
+library("effects")
+library("car")
+library("sjPlot")
+"""
+```
+
+We are working with the *ManyBabies 1 - Infant-directed Speech Preference* dataset that has been published at:
+https://github.com/manybabies/mb1-analysis-public
+
+```{julia; cache=true; wrap=false}
+mb1 = CSV.read(
+    download("https://raw.githubusercontent.com/manybabies/mb1-analysis-public/fa7e77c026a4dc0b0bb7e78d3bf3771c9bc2f7cb/processed_data/03_data_trial_main.csv"),
+    missingstrings=["NA","N/A"],
+    truestrings=["TRUE"],
+    falsestrings=["FALSE"]);
+```
+
+Recode the levels of `gender`, add the `item` variable (join condition and stimulus information), center the `age_mo`, and relevel `method` and `age_group`.
+Add log-transformed looking time `log_lt` for visualization. Drop observations with a missing response (`looking_time`).
+
+```{julia; cache=true; wrap=false}
+mb1a = @linq mb1 |>
+    transform(gender = recode(:gender, "0"=>missing, "MALE"=>"M", "FEMALE"=>"F"),
+              item = string.(:stimulus_num, :trial_type),
+              age_mo = :age_mo .- mean(:age_mo),
+              log_lt = log.(:looking_time),
+              method = levels!(categorical(:method), ["singlescreen", "eyetracking", "hpp"]),
+              age_group = levels!(categorical(:age_group), ["3-6 mo", "6-9 mo", "9-12 mo", "12-15 mo"])) |>
+    where(.!ismissing.(:looking_time));
+disallowmissing!(mb1a, error=false);
+describe(mb1a)
+```
+
+# Fit some models in Julia
+
+## Intercepts only
+Fit the linear mixed-effects model from the paper. We replicate the reported results.
+
+```{julia; cache=true; wrap=false}
+m1form = @formula log(looking_time) ~ trial_type * method +
+                   trial_type * trial_num +
+                   age_mo * trial_num +
+                   trial_type * age_mo * nae +
+                   (1 | subid_unique) +
+                   (1 | lab) +
+                   (1 | item);
+m1 = fit(MixedModel, m1form, mb1a, REML=true)
+```
+
+The thresholding of the response produces some unusual patterns in the residuals versus fitted values.
+
+```{julia; cache=true; wrap=false}
+plot(x=fitted(m1), y=residuals(m1), Geom.density2d)
+```
+
+## Preregistered maximal model
+
+Fit the authors' intended maximal mixed-effects model. lme4 in R did initally not converge and now throws singularity warnings for this model.
+We switch from REML to ML.
+
+```{julia; cache=true; wrap=false}
+m2form = @formula log(looking_time) ~ trial_type * method +
+                   trial_type * trial_num +
+                   age_mo * trial_num +
+                   trial_type * age_mo * nae +
+                   (1 + trial_type * trial_num | subid_unique) +
+                   (1 + trial_type * age_mo | lab) +
+                   (1 + method + age_mo * nae | item);
+m2 = LinearMixedModel(m2form, mb1a)
+m2.optsum.initial = θ₀
+fit!(m2)
+```
+
+# Move models from Julia to R
+
+We start with the simple model, because like everything else in Julia, the first time you do something using `JellyMe4`, you have to wait for the JIT.
+
+We first have to define a Tuple that wraps the fitted model and its data source (usually a `DataFrame`). MixedModels doesn't keep a copy of the 'raw' data stored in a convenient way and the internal structures are different enough that it would be a LOT of work to convert them directly. Instead, we create a model in lme4 and use the `theta` vector from MixedModels as a starting point and allow one optimizer step.
+
+In other words, this isn't instantaneous -- we have to shuffle data back-and-forth and wait for a single step of the optimizer, which for large models isn't fast.
+
+```{julia; cache=true; wrap=false}
+m1r = Tuple([m1,mb1a])
+@rput m1r;
+R"summary(m1r)"
+```
+
+As stated above, there is some error catching for common mistakes:
+
+```{julia; cache=true; wrap=false}
+@rput m1
+```
+
+The model we've created in R is a real lme4 model, and we can do all the usual stuff with it. Let's do that with the more complicated model.
+
+```{julia; cache=true; wrap=false}
+m2r = Tuple([m2,mb1a])
+@time @rput m2r;
+```
+
+```{julia; cache=true; wrap=false}
+m1.optsum.feval
+```
+
+```{julia; cache=true; wrap=false}
+R"m1r@optinfo$feval"
+```
+
+```{julia; cache=true; wrap=false}
+R"summary(m2r)"
+```
+
+```{julia; cache=true; wrap=false}
+R"plot(m2r)"
+```
+
+```{julia; cache=true; wrap=false}
+R"dotplot(ranef(m2r,condVar=TRUE))"
+```
+
+```{julia; cache=true; wrap=false}
+R"qqmath(m2r)"
+```
+
+Because it's a proper `merMod` model, we instantly get access to all packages supporting `merMod`.
+
+### Effects
+
+```{julia; cache=true; wrap=false}
+R"""
+eff <- Effect(c("trial_type", "age_mo", "nae"), m2r, KR=FALSE)
+plot(eff, rug=FALSE)
+"""
+```
+
+### CAR
+
+```{julia; cache=true; wrap=false}
+R"Anova(m2r, type=2)"
+```
+
+### lmerTest
+
+But seriously, don't do this. It makes us cry.
+
+And if you try to do the Kenward-Roger ddf correction on this model, it will also make you try because there's this line of code in there:
+
+
+```{R; eval=false}
+## print("HHHHHHHHHHHHHHH")
+SigmaInv <- chol2inv( chol( forceSymmetric(SigmaG$Sigma) ) )
+## print("DONE --- HHHHHHHHHHHHHHH")
+```
+[from source code of `pbkrtest`](https://github.com/hojsgaard/pbkrtest/blob/d44880463a2b2855cda1f60fda030bd5373a97e3/R/KR-vcovAdj.R#L109-L111)
+
+In other words, a naive inverse on a large, unstructured matrix. Noooooooooooooooooooo ..... you still have several yearsof 'oooo'ing and hundreds more gigabytes of memory to go .....
+
+```{julia; cache=true; wrap=false}
+R"""
+library("lmerTest")
+abomination1 <- as(m1r, "merModLmerTest")
+summary(abomination1, ddf="Satterthwaite")
+"""
+```
+
+### lmerOut
+
+And some gratuitous self-advertising. Checkout my [`lmerOut`](https://bitbucket.org/palday/lmerout) package for generating HTML or LaTeX output from `merMod`.
+
+
+```{julia; cache=true; wrap=false}
+R"""library("lmerOut")"""
+```
+
+```{julia; cache=true; wrap=false}
+HTML(rcopy(R"""pprint(m2r,type="html")"""))
+```
+
+```{julia; cache=true; wrap=false}
+HTML(rcopy(R"""pprint(summary(m2r),type="html")"""))
+```
+
+```{julia; cache=true; wrap=false}
+HTML(rcopy(R"""pprint(Anova(m2r),type="html")"""))
+```
+
+# Fit some models in R
+
+```{julia; cache=true; wrap=false}
+R"""
+msleep <- lme4::lmer(Reaction ~ 1 + Days + (1 + Days | Subject), sleepstudy, REML=FALSE)
+summary(msleep)
+"""
+```
+
+```{julia; cache=true; wrap=false}
+R"""msleep@optinfo$feval"""
+```
+
+# Move models from R to Julia
+
+```{julia; cache=true; wrap=false}
+@rget msleep
+```
+
+```{julia; cache=true; wrap=false}
+msleep.optsum
+```
+
+## What won't work:
+
+1. Most transformations within model formulae, especially things like R's `scale` which acts on all values in a column simultaneously. Transform ahead of time.
+2. Contrast coding. I'm working on this, but it's really non-trivial, especially if you want meaningful names preserved. So you have two options
+    1. Fund another two-week retreat for me and Dave where we're not doing any of the other stuff (including all of the other Julia-related stuff we're already tapped for).
+    2. Set up numeric predictors by hand.
+3. Missing data is handled differently in Julia and R. Solution:
+    1. Reduce your dataframe down to the columns you need (which will speed up things because there's less to push pack and forth across the bridge).
+    2. Remove the rows that still contain missing data.
+    3. (Profit).
+4. "Advanced" models using `zerocorr` or other variance-structure transformations in Julia or `||` in R. `zerocorr` and `||` aren't directly equivalent and adding in the extra machinery to yield equivalent results is time I'm not working on `MixedModels` proper or GLMM support (see next point).
+5. GLMMs with one exception (see below).
+
+And a final word of warning: JellyMe4 uses several variables prefixed `jellyme4_` in R as a scratch space. Once you've moved something across the bridge, these can be removed. Generally, they will be quite small, with the exception of the model, but as long as you don't call `update()` on a model, the extra copy of the model won't take up additional space.
+
+# Generalized Linear Mixed Models
+
+Right now, there is *extremely* limited support for GLMMs.
+
+And I mean **extremely**.
+
+You can take a Bernoulli model in Julia (i.e. a Binomial model fit to `0`s and `1`s at the single-trial/observation level) and move it to R. Because of (insert lots of math and computer science here), you tend to lose some a bit of fidelity in the translation, **but** the model is still close enough for plotting purposes.
+
+And that's it.
+
+I'm jobless starting 1 June, so pay me and we'll see about supporting more.
+
+```{julia; cache=true; wrap=false}
+verbagg = MixedModels.dataset(:verbagg)
+glmm_form = @formula(r2 ~ 1 + anger + gender + btype + situ + (1|subj) + (1|item));
+```
+
+```{julia; cache=true; wrap=false}
+fast = fit!(GeneralizedLinearMixedModel(glmm_form, verbagg, Bernoulli()), fast=true)
+```
+
+```{julia; cache=true; wrap=false}
+mlogit = Tuple([fast, verbagg]);
+@rput mlogit;
+R"summary(mlogit)"
+```
+
+```{julia; cache=true; wrap=false}
+import GLM: ProbitLink
+```
+
+```{julia; cache=true; wrap=false}
+slow = fit!(GeneralizedLinearMixedModel(glmm_form, verbagg, Bernoulli(), ProbitLink()), fast=false);
+```
+
+```{julia; cache=true; wrap=false}
+mprobit = Tuple([slow, verbagg]);
+@rput mprobit;
+R"summary(mprobit)"
+```
+
+```{julia; cache=true; wrap=false}
+R"""
+plot_model(mprobit, type = "pred", terms = c("anger", "gender"))
+"""
+```
