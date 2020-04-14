@@ -1,5 +1,5 @@
 %.md: %.jmd
-	julia -e'using Weave; weave("$*.jmd", doctype="pandoc")'
+	julia -e'using Pkg; Pkg.activate("."); using Weave; weave("$*.jmd", doctype="pandoc")'
 
 %.ipynb: %.jmd
-	julia -e'using Weave; convert_doc("$*.jmd", "$*.ipynb")'
+	julia -e'using Pkg; Pkg.activate("."); using Weave; convert_doc("$*.jmd", "$*.ipynb")'
