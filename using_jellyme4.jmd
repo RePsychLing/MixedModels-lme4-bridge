@@ -3,13 +3,13 @@ title: Introducing JellyMe4
 subtitle: Black Magic and Many Babies
 author:
     - "Phillip M. Alday"
-date: February 2020
+date: April 2020
 ---
 
-`JellyMe4` is brand new. There is currently a request to have it registered as an official package, but for now you'll have to install it via
+`JellyMe4` is brand new. The basic functionality is there and works quite well for linear mixed models and some things with Bernoulli (binomial) models, but there's still a lot of work to be done. You can install it in Julia with:
 
 ```{julia; cache=true; wrap=false}
-julia>]https://github.com/palday/JellyMe4.jl
+julia>] add JellyMe4
 ```
 
 There is relatively little only help via the Julia help (`?`) because creating this type of bridge mostly involves defining methods for the functions RCall uses in the background. These functions are then invoked via `@rget`, `@rput`, `R"some_command"`, and `rcopy`), and the documentation for those is (intentionally) generic.
@@ -18,7 +18,7 @@ There is however documentation available in the [README](https://github.com/pald
 
 # Preprocessing of Many Babies Data
 
-(borrowed from https://github.com/RePsychLing/mb1/blob//MB1_analysis.jmd at commit `479db01 `)
+(borrowed from https://github.com/RePsychLing/mb1/blob/MB1_analysis.jmd at commit `479db01 `)
 
 ```{julia; cache=true; wrap=false}
 using CSV            # read and write .csv files
