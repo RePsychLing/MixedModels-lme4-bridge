@@ -93,6 +93,10 @@ Fit the authors' intended maximal mixed-effects model. lme4 in R did initally no
 We switch from REML to ML.
 
 ```{julia; cache=true; wrap=false}
+θ₀ = [0.6708431583270431, 0.04452837379098554, -0.033905907297640585, 0.0006301683801370033, 0.045458334569101685, 0.02399706874577745, -0.017899450182320156, 0.03049946852737771, 0.010098230361604413, 0.0, 0.32823683943769727, -0.002408042747239445, -0.014614726384669947, 0.0005506487537108181, 0.017739678181209164, -0.06344258219994234, 0.000643646423805378, 0.01788715144366557, -0.0006653928345678921, 0.016875548312250292, 0.09471334102132914, -0.023974868738062503, 0.012775460504139068, 0.007353329814025138, 0.030579010234562123, 0.0012152233979149615, 0.03034634627714072, 0.011923248020326656, 0.004817176571740912, 0.04183967949541931, -0.0008251036756752757, 0.008707489003176486, 0.001849060002553708, 0.015118896832479358, -0.006776185024737585, 0.0, -0.0001159837705579534, 0.00010485956456427431, 0.0, -0.00037453108506714603, 0.0]
+```
+
+```{julia; cache=true; wrap=false}
 m2form = @formula log(looking_time) ~ trial_type * method +
                    trial_type * trial_num +
                    age_mo * trial_num +
@@ -114,7 +118,7 @@ We first have to define a Tuple that wraps the fitted model and its data source 
 In other words, this isn't instantaneous -- we have to shuffle data back-and-forth and wait for a single step of the optimizer, which for large models isn't fast.
 
 ```{julia; cache=true; wrap=false}
-m1r = Tuple([m1,mb1a])
+m1r = (m1,mb1a)
 @rput m1r;
 R"summary(m1r)"
 ```
@@ -128,7 +132,7 @@ As stated above, there is some error catching for common mistakes:
 The model we've created in R is a real lme4 model, and we can do all the usual stuff with it. Let's do that with the more complicated model.
 
 ```{julia; cache=true; wrap=false}
-m2r = Tuple([m2,mb1a])
+m2r = (m2,mb1a)
 @time @rput m2r;
 ```
 
@@ -243,10 +247,8 @@ msleep.optsum
 
 ## What won't work:
 
-1. Most transformations within model formulae, especially things like R's `scale` which acts on all values in a column simultaneously. Transform ahead of time.
-2. Contrast coding. I'm working on this, but it's really non-trivial, especially if you want meaningful names preserved. So you have two options
-    1. Fund another two-week retreat for me and Dave where we're not doing any of the other stuff (including all of the other Julia-related stuff we're already tapped for).
-    2. Set up numeric predictors by hand.
+1. Most transformations within model formulae, especially things like R's `scale` which acts on all values in a column simultaneously. Transform ahead of time. (`log`, `log10` and `exp` are the exceptions).
+2. Regression weights.  This isn't terribly difficult, but my time is limited and it doesn't matter for my own work.
 3. Missing data is handled differently in Julia and R. Solution:
     1. Reduce your dataframe down to the columns you need (which will speed up things because there's less to push pack and forth across the bridge).
     2. Remove the rows that still contain missing data.
@@ -278,7 +280,7 @@ fast = fit!(GeneralizedLinearMixedModel(glmm_form, verbagg, Bernoulli()), fast=t
 ```
 
 ```{julia; cache=true; wrap=false}
-mlogit = Tuple([fast, verbagg]);
+mlogit = (fast, verbagg);
 @rput mlogit;
 R"summary(mlogit)"
 ```
@@ -292,7 +294,7 @@ slow = fit!(GeneralizedLinearMixedModel(glmm_form, verbagg, Bernoulli(), ProbitL
 ```
 
 ```{julia; cache=true; wrap=false}
-mprobit = Tuple([slow, verbagg]);
+mprobit = (slow, verbagg);
 @rput mprobit;
 R"summary(mprobit)"
 ```
